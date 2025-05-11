@@ -47,7 +47,7 @@ pub enum Token {
     OrOr(Position),                // ||
     And(Position),                 // &
     AndAnd(Position),              // &&
-    Eof,
+    Eof(Position),
 }
 
 macro_rules! next_and {
@@ -67,65 +67,64 @@ macro_rules! next_and {
 }
 
 pub fn tokenize(input: String) -> Vec<Token> {
-    let (mut row, mut col) = (0, 0);
+    let (mut row, mut col) = (1, 1);
     let mut output: Vec<Token> = vec![];
     let mut chars = input.chars().into_iter().peekable();
     while let Some(char) = chars.next() {
-        let token: Token = match char {
-            c if c.is_whitespace() => {
-                if c == '\n' {
+        match char {
+            ' ' | '\n' | '\t' => {
+                if char == '\n' {
                     row += 1;
-                    col = 0;
+                    col = 1;
                 }
-                continue
             },
-            // TODO: add '_'
-            c if c.is_alphabetic() => {
-                let mut end = (row, col);
+            c if c.is_ascii_alphabetic() || c == '_' => {
+                let start = (row, col);
                 let mut val = String::from(char);
                 while let Some(n) = chars.peek() {
-                    if !n.is_ascii_alphanumeric() { break; }
-                    end.0 += 1;
+                    if !n.is_ascii_alphanumeric() && *n != '_' { break; }
+                    col += 1;
                     val.push(*n);
                     chars.next();
                 }
 
-                Token::Identifier(Position{ start: (row, col), end, }, val)
+                output.push(Token::Identifier(Position{ start, end: (row, col) }, val));
             },
             //TODO: decimals
             c if c.is_ascii_digit() => {
-                let mut end = (row, col);
+                let start = (row, col);
                 let mut val = String::from(char);
                 while let Some(n) = chars.peek() {
                     if !n.is_ascii_digit() { break; }
-                    end.0 += 1;
+                    col += 1;
                     val.push(*n);
                     chars.next();
                 }
 
-                Token::NumLiteral(Position{ start: (row, col), end, }, val) },
+                output.push(Token::NumLiteral(Position{ start, end: (row, col) }, val));
+            },
             '"' => {
-                let mut end = (row, col);
+                let start = (row, col);
                 let mut val = String::new();
                 let mut terminated = false;
                 while let Some(&n) = chars.peek() {
                     chars.next();
+                    col += 1;
                     if n == '"' {
                         terminated = true;
                         break;
                     }
 
-                    end.0 += 1;
                     val.push(n);
                 }
 
-                if !terminated { panic!("ERROR: string literal not terminated"); }
-                Token::StrLiteral(Position{ start: (row, col), end, }, val)
+                if !terminated { panic!("ERROR: string literal not terminated at {row}:{col}"); }
+                output.push(Token::StrLiteral(Position{ start, end: (row, col) }, val));
             },
-            '(' => Token::LParen(Position{ start: (row, col), end: (row, col) }),
-            ')' => Token::RParen(Position{ start: (row, col), end: (row, col) }),
-            '{' => Token::LBrace(Position{ start: (row, col), end: (row, col) }),
-            '}' => Token::RBrace(Position{ start: (row, col), end: (row, col) }),
+            '(' => output.push(Token::LParen(Position{ start: (row, col), end: (row, col) })),
+            ')' => output.push(Token::RParen(Position{ start: (row, col), end: (row, col) })),
+            '{' => output.push(Token::LBrace(Position{ start: (row, col), end: (row, col) })),
+            '}' => output.push(Token::RBrace(Position{ start: (row, col), end: (row, col) })),
             '<' => {
                 let mut cur = Token::Lt(Position{ start: (row, col), end: (row, col) });
                 if let Some(next) = chars.peek() {
@@ -142,7 +141,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     };
                 }
-                cur
+                output.push(cur);
             },
             '>' => {
                 let mut cur = Token::Gt(Position{ start: (row, col), end: (row, col) });
@@ -160,7 +159,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     };
                 }
-                cur
+                output.push(cur);
             },
             '+' => {
                 let mut cur = Token::Add(Position{ start: (row, col), end: (row, col) });
@@ -171,7 +170,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     };
                 }
-                cur
+                output.push(cur);
             },
             '-' => {
                 let mut cur = Token::Sub(Position{ start: (row, col), end: (row, col) });
@@ -183,7 +182,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     };
                 }
-                cur
+                output.push(cur);
             },
             '*' => {
                 let mut cur = Token::Mul(Position{ start: (row, col), end: (row, col) });
@@ -193,17 +192,39 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     }
                 }
-                cur
+                output.push(cur);
             },
-            '/' => { // TODO: comments, block comments
+            '/' => {
                 let mut cur = Token::Div(Position{ start: (row, col), end: (row, col) });
                 if let Some(next) = chars.peek() {
                     cur = match next {
+                        '/' => {
+                            loop {
+                                match chars.peek() {
+                                    Some('\n') => break,
+                                    None => break,
+                                    _ => next_and!(chars, continue),
+                                }
+                            }
+
+                            continue
+                        },
+                        '*' => {
+                            loop {
+                                match (chars.next(), chars.peek()) {
+                                    (Some('*'), Some('/')) => break,
+                                    (Some(_), Some(_)) => continue,
+                                     _ => panic!("ERROR: comment block not terminated at {row}:{col}"),
+                                }
+                            }
+
+                            continue
+                        },
                         '=' => next_and!(chars, Token::DivEq(Position{ start: (row, col), end: (row + 1, col + 1) })),
                         _ => cur,
                     };
                 }
-                cur
+                output.push(cur);
             },
             '=' => {
                 let mut cur = Token::Eq(Position{ start: (row, col), end: (row, col) });
@@ -214,7 +235,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     };
                 } 
-                cur
+                output.push(cur);
             },
             '!' => {
                 let mut cur = Token::Not(Position{ start: (row, col), end: (row, col) });
@@ -224,7 +245,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     }
                 }
-                cur
+                output.push(cur);
             },
             '|' => {
                 let mut cur = Token::Or(Position{ start: (row, col), end: (row, col) });
@@ -235,7 +256,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     }
                 }
-                cur
+                output.push(cur);
             },
             '&' => {
                 let mut cur = Token::And(Position{ start: (row, col), end: (row, col) });
@@ -246,7 +267,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     }
                 } 
-                cur
+                output.push(cur);
             },
             '^' => {
                 let mut cur = Token::Xor(Position{ start: (row, col), end: (row, col) });
@@ -256,7 +277,7 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     }
                 }
-                cur
+                output.push(cur);
             },
             '%' => {
                 let mut cur = Token::Mod(Position{ start: (row, col), end: (row, col) });
@@ -266,22 +287,22 @@ pub fn tokenize(input: String) -> Vec<Token> {
                         _ => cur,
                     };
                 }
-                cur
+                output.push(cur);
             },
-            _ => panic!("undefined token `{}`", char),
+            _ => panic!("ERROR: unknown char `{char}` at {row}:{col}"),
         };
 
         col += 1;
-        output.push(token);
     }
 
-    output.push(Token::Eof);
+    output.push(Token::Eof(Position { start: (row, col), end: (row, col) }));
     output
 }
 
 #[cfg(test)]
 mod tests {
     use std::mem::discriminant;
+    use super::*;
 
     macro_rules! variant_eq {
         ($left:ident, $right:ident) => { discriminant(&$left) == discriminant(&$right) };
@@ -290,19 +311,6 @@ mod tests {
         ($left:expr, $right:expr) =>   { discriminant(&$left) == discriminant(&$right) };
     }
 
-    use super::*;
-
-    /*
-    #[test]
-    fn literals() {
-        let input = "\"Hello, World\" 12895".to_string();
-        let tokens = tokenize(input);
-        let mut token = tokens.iter();
-        assert_eq!(*token.next().unwrap(), Token::new(TokenType::StrLiteral, Some("Hello, World".to_string())));
-        assert_eq!(*token.next().unwrap(), Token::new(TokenType::NumLiteral, Some("12895".to_string())));
-        assert_eq!(*token.next().unwrap(), Token::new(TokenType::Eof, None));
-    }
-    */
 
     #[test]
     fn operators() {
@@ -332,19 +340,20 @@ mod tests {
         assert!(variant_eq!(*token.next().unwrap(), Token::SubSub(pos.clone())));
         assert!(variant_eq!(*token.next().unwrap(), Token::OrOr(pos.clone())));
         assert!(variant_eq!(*token.next().unwrap(), Token::AndAnd(pos.clone())));
-        assert!(variant_eq!(*token.next().unwrap(), Token::Eof));
+        assert!(variant_eq!(*token.next().unwrap(), Token::Eof(pos.clone())));
     }
 
     #[test]
-    fn program() {
-        let input = "main() {\n\
-            var a\n\
-            a = 10\n\
-            print(a)\n\
-        }".to_string();
+    fn file() -> Result<(), std::io::Error> {
+        let filename = "main.hl";
+        let input = std::fs::read(filename)?;
+        let input = std::str::from_utf8(input.as_slice()).expect("should be utf8").to_string();
+
         let tokens = tokenize(input);
         for token in tokens {
             eprintln!("{:?}", token);
         }
+
+        Ok(())
     }
 }
